@@ -1,0 +1,243 @@
+
+<!-- this ui is good and works for both speech to text and speech to image-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Chatbot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        .chat-container {
+            width: 90%;
+            max-width: 600px;
+            height: 80%;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #fff;
+        }
+
+        .chat-header {
+            background-color: #007bff;
+            color: #fff;
+            padding: 10px;
+            text-align: center;
+            font-size: 18px;
+        }
+
+        .chat-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .chat-message {
+            margin: 10px 0;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .bot-message {
+            margin-right: auto;
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 15px 15px 15px 0;
+            max-width: 70%;
+        }
+
+        .user-message {
+            margin-left: auto;
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border-radius: 15px 15px 0 15px;
+            max-width: 70%;
+        }
+
+        .bot-message {
+    background-color: #d3d3d3; /* Grey background */
+    display: inline-block; /* Make the container size fit the content (image) */
+    padding: 0; /* No padding to avoid extra space around the image */
+    border-radius: 8px; /* Rounded corners for the box */
+    text-align: center; /* Center the image within the box */
+}
+
+.bot-message .image-container {
+    background-color: #d3d3d3; /* Same grey as the box */
+    display: inline-block;
+    border-radius: 8px; /* Ensure the corners match */
+    overflow: hidden; /* Make sure the image doesn’t overflow the container */
+}
+
+.bot-message img {
+    width: 150px; /* Set image width */
+    height: 150px; /* Set image height */
+    object-fit: cover; /* Crop the image if necessary to fit */
+    border-radius: 8px; /* Ensure the image has rounded corners */
+}
+
+        .chat-footer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px;
+            border-top: 1px solid #ddd;
+            background-color: #fff;
+        }
+
+        .record-button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .record-button:disabled {
+            background-color: #bbb;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">Audio Chatbot</div>
+        <div id="chat-body" class="chat-body"></div>
+        <div class="chat-footer">
+            <button id="record-button" class="record-button">Start Recording</button>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let silenceTimeout;
+        const silenceThreshold = 5000; // milliseconds of silence before stopping the recording
+
+        const chatBody = document.getElementById('chat-body');
+        const recordButton = document.getElementById('record-button');
+
+        recordButton.addEventListener('click', async () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                await startRecording();
+            }
+        });
+
+        async function startRecording() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Your browser does not support audio recording.');
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    isRecording = false;
+                    recordButton.textContent = 'Start Recording';
+                    recordButton.disabled = false;
+
+                    // // Display user message in the chat
+                    // placeholderMessageDiv = addMessageToChat("User: (audio message)", 'user');
+
+                    // Send audioBlob to the backend
+                    processAudio(audioBlob);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordButton.textContent = 'Recording... (Click to Stop)';
+                recordButton.disabled = true;
+
+                // Start detecting silence
+                detectSilence();
+            } catch (error) {
+                console.error('Error starting recording:', error);
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            clearTimeout(silenceTimeout);
+        }
+
+        async function processAudio(audioBlob) {
+            const formData = new FormData();
+            formData.append('file', audioBlob, 'audio.webm');  // Ensure 'file' is the name
+
+            try {
+                const response = await fetch('/transcribe-audio/', {
+                    method: 'POST',
+                    body: formData,  // Ensure FormData is being sent correctly
+                });
+
+                const data = await response.json();
+                addMessageToChat(data.content, 'user');
+                if (data.type === 'text') {
+                    addMessageToChat(data.response, 'bot');
+                } else if (data.type === 'image') {
+                    addImageToChat(data.url, 'bot');
+                }
+            } catch (error) {
+                console.error('Error processing audio:', error);
+                addMessageToChat('Sorry, something went wrong. Please try again.', 'bot');
+            }
+        }
+
+        function detectSilence() {
+            silenceTimeout = setTimeout(() => {
+                if (isRecording) {
+                    stopRecording();  // Automatically stop after silence
+                    // addMessageToChat('Recording stopped due to silence.', 'bot');
+                }
+            }, silenceThreshold);
+        }
+
+        function addMessageToChat(message, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('chat-message', `${sender}-message`);
+            messageDiv.textContent = message;
+            chatBody.appendChild(messageDiv);
+            chatBody.scrollTop = chatBody.scrollHeight;
+        }
+
+        function addImageToChat(imageUrl, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('chat-message', `${sender}-message`);
+            const img = document.createElement('img');
+            img.src = imageUrl;
+            messageDiv.appendChild(img);
+            chatBody.appendChild(messageDiv);
+            chatBody.scrollTop = chatBody.scrollHeight;
+        }
+    </script>
+</body>
+</html>
